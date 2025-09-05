@@ -1,0 +1,239 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mcp-server
+  labels:
+    name: mcp-server
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mcp-secrets
+  namespace: mcp-server
+type: Opaque
+data:
+  jwt-secret: <base64-encoded-jwt-secret>
+  encryption-key: <base64-encoded-encryption-key>
+  aws-access-key: <base64-encoded-aws-access-key>
+  aws-secret-key: <base64-encoded-aws-secret-key>
+  gcp-credentials: <base64-encoded-gcp-credentials>
+  azure-connection-string: <base64-encoded-azure-connection-string>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-config
+  namespace: mcp-server
+data:
+  NODE_ENV: "production"
+  LOG_LEVEL: "info"
+  PORT: "3000"
+  AWS_REGION: "us-east-1"
+  GOOGLE_CLOUD_PROJECT: "your-gcp-project"
+  AZURE_TENANT_ID: "your-azure-tenant-id"
+  AZURE_CLIENT_ID: "your-azure-client-id"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: enterprise-mcp-server
+  namespace: mcp-server
+  labels:
+    app: enterprise-mcp-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: enterprise-mcp-server
+  template:
+    metadata:
+      labels:
+        app: enterprise-mcp-server
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+      - name: mcp-server
+        image: enterprise-mcp-server:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+          name: http
+        env:
+        - name: NODE_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: mcp-config
+              key: NODE_ENV
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: mcp-config
+              key: LOG_LEVEL
+        - name: PORT
+          valueFrom:
+            configMapKeyRef:
+              name: mcp-config
+              key: PORT
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: mcp-secrets
+              key: jwt-secret
+        - name: ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mcp-secrets
+              key: encryption-key
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: mcp-secrets
+              key: aws-access-key
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mcp-secrets
+              key: aws-secret-key
+        - name: AWS_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: mcp-config
+              key: AWS_REGION
+        - name: GOOGLE_CLOUD_PROJECT
+          valueFrom:
+            configMapKeyRef:
+              name: mcp-config
+              key: GOOGLE_CLOUD_PROJECT
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: "/secrets/gcp-credentials.json"
+        - name: AZURE_STORAGE_CONNECTION_STRING
+          valueFrom:
+            secretKeyRef:
+              name: mcp-secrets
+              key: azure-connection-string
+        - name: AZURE_TENANT_ID
+          valueFrom:
+            configMapKeyRef:
+              name: mcp-config
+              key: AZURE_TENANT_ID
+        - name: AZURE_CLIENT_ID
+          valueFrom:
+            configMapKeyRef:
+              name: mcp-config
+              key: AZURE_CLIENT_ID
+        - name: AZURE_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: mcp-secrets
+              key: azure-client-secret
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - name: gcp-credentials
+          mountPath: "/secrets"
+          readOnly: true
+        - name: logs
+          mountPath: "/app/logs"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: gcp-credentials
+        secret:
+          secretName: mcp-secrets
+          items:
+          - key: gcp-credentials
+            path: gcp-credentials.json
+      - name: logs
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: enterprise-mcp-server-service
+  namespace: mcp-server
+  labels:
+    app: enterprise-mcp-server
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3000
+    targetPort: 3000
+    protocol: TCP
+    name: http
+  selector:
+    app: enterprise-mcp-server
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: enterprise-mcp-server-ingress
+  namespace: mcp-server
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+spec:
+  tls:
+  - hosts:
+    - mcp-server.your-domain.com
+    secretName: mcp-server-tls
+  rules:
+  - host: mcp-server.your-domain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: enterprise-mcp-server-service
+            port:
+              number: 3000
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: enterprise-mcp-server-hpa
+  namespace: mcp-server
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: enterprise-mcp-server
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
