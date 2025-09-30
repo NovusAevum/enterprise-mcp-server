@@ -428,7 +428,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 For support and questions:
 
 - Create an issue in the GitHub repository
-- Contact: [wanmohamadhanis@gmail.com](mailto:wanmohamadhanis@gmail.com)
+- Contact: [wmh2u@proton.me](mailto:wmh2u@proton.me)
 
 ## 🔄 Changelog
 
